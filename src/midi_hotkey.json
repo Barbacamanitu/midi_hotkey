@@ -1,0 +1,20 @@
+{
+    "hotkeys": {
+        "24": {
+            "outputs": [
+                {
+                    "note" : 0,
+                    "velocity": 1.0
+                },
+                {
+                    "note": 1,
+                    "velocity": 0.5
+                },
+                {
+                    "note": 2,
+                    "velocity": 0.75
+                }
+            ]
+        }
+    }
+}
