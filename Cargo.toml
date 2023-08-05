@@ -15,3 +15,4 @@ nih_plug = { path = "../nih-plug"}
 serde_json = "1.0.104"
 serde = { version = "1.0", features = ["derive"] }
 process_path = "0.1.4"
+queues = "1.0.2"

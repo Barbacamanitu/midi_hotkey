@@ -1,14 +1,19 @@
 mod hotkey;
 mod util;
+extern crate queues;
 use hotkey::HotkeyMap;
 use nih_plug::prelude::*;
 use process_path::get_dylib_path;
+use queues::{IsQueue, Queue};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+//POD struct for creating midi events. Workaround because storing NoteEvents in a container was problematic due to generic.
+#[derive(Clone)]
 struct MidiNoteEvent {
+    event_type: MidiEventType,
     timing: u32,
     voice_id: Option<i32>,
     channel: u8,
@@ -16,11 +21,16 @@ struct MidiNoteEvent {
     velocity: f32,
 }
 
+#[derive(Clone)]
+enum MidiEventType {
+    NoteOn,
+    NoteOff,
+}
+
 struct MidiHotkey {
     params: Arc<MidiHotkeyParams>,
     hotkey_map: hotkey::HotkeyMap,
-    noteon: Vec<MidiNoteEvent>,
-    noteoff: Vec<MidiNoteEvent>,
+    event_queue: Queue<MidiNoteEvent>,
 }
 
 #[derive(Default, Params)]
@@ -31,8 +41,7 @@ impl Default for MidiHotkey {
         Self {
             params: Arc::new(MidiHotkeyParams::default()),
             hotkey_map: HotkeyMap::from_json(&util::read_json_file()),
-            noteon: Vec::new(),
-            noteoff: Vec::new(),
+            event_queue: Queue::new(),
         }
     }
 }
@@ -76,12 +85,15 @@ impl Plugin for MidiHotkey {
                     note,
                     velocity,
                 } => {
+                    //Check if played note is in the hotkey map.
                     let hk = self.hotkey_map.hotkeys.get(&note);
 
                     match hk {
                         Some(hotkey_entry) => {
+                            //Hotkey found. Iterate through all output notes and queue up events for each one.
                             for note in &hotkey_entry.outputs {
-                                self.noteon.push(MidiNoteEvent {
+                                self.event_queue.add(MidiNoteEvent {
+                                    event_type: MidiEventType::NoteOn,
                                     timing: timing,
                                     voice_id: voice_id,
                                     channel: channel,
@@ -90,6 +102,7 @@ impl Plugin for MidiHotkey {
                                 });
                             }
                         }
+                        //Note not found in hotkey map. Forward event unchanged.
                         None => context.send_event(NoteEvent::NoteOn {
                             timing,
                             voice_id,
@@ -106,11 +119,14 @@ impl Plugin for MidiHotkey {
                     note,
                     velocity,
                 } => {
+                    //See if released note is in hotkey list.
                     let hk = self.hotkey_map.hotkeys.get(&note);
                     match hk {
                         Some(hotkey_entry) => {
+                            //Queue up all necessary note-off messages.
                             for note in hotkey_entry.outputs.iter() {
-                                self.noteoff.push(MidiNoteEvent {
+                                self.event_queue.add(MidiNoteEvent {
+                                    event_type: MidiEventType::NoteOff,
                                     timing: timing,
                                     voice_id: voice_id,
                                     channel: channel,
@@ -119,6 +135,7 @@ impl Plugin for MidiHotkey {
                                 });
                             }
                         }
+                        //Released note not found in hotkey map. Forward event unchanged.
                         None => context.send_event(NoteEvent::NoteOff {
                             timing,
                             voice_id,
@@ -132,27 +149,26 @@ impl Plugin for MidiHotkey {
             }
         }
 
-        self.noteon.iter().for_each(|noteon| {
-            context.send_event(NoteEvent::NoteOn {
-                timing: noteon.timing,
-                voice_id: noteon.voice_id,
-                channel: noteon.channel,
-                note: noteon.note,
-                velocity: noteon.velocity,
-            });
-        });
-        self.noteoff.iter().for_each(|noteoff| {
-            context.send_event(NoteEvent::NoteOff {
-                timing: noteoff.timing,
-                voice_id: noteoff.voice_id,
-                channel: noteoff.channel,
-                note: noteoff.note,
-                velocity: noteoff.velocity,
-            });
-        });
-        self.noteon = Vec::new();
-        self.noteoff = Vec::new();
-
+        //Send all queued note-on/off events.
+        while self.event_queue.size() > 0 {
+            let event = self.event_queue.remove().unwrap();
+            match event.event_type {
+                MidiEventType::NoteOn => context.send_event(NoteEvent::NoteOn {
+                    timing: event.timing,
+                    voice_id: event.voice_id,
+                    channel: event.channel,
+                    note: event.note,
+                    velocity: event.velocity,
+                }),
+                MidiEventType::NoteOff => context.send_event(NoteEvent::NoteOff {
+                    timing: event.timing,
+                    voice_id: event.voice_id,
+                    channel: event.channel,
+                    note: event.note,
+                    velocity: event.velocity,
+                }),
+            }
+        }
         ProcessStatus::Normal
     }
 }
